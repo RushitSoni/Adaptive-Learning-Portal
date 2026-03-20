@@ -1,0 +1,10 @@
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL")
+
+HF_API_KEY = os.getenv("HF_API_KEY")
+HF_EMBEDDING_MODEL = os.getenv("HF_EMBEDDING_MODEL")
