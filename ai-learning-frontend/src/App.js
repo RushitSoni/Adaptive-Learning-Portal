@@ -1,37 +1,32 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useSelector } from "react-redux";
 
-import Navbar from "./components/NavigationBar";
+import LoginPage    from "./pages/LoginPage";
+import HomePage     from "./pages/HomePage";
+import ChatPage     from "./pages/ChatPage";
+import TestPage     from "./pages/TestPage";
+import CodeJudge    from "./pages/CodeJudge";
+import ProfilePage  from "./pages/ProfilePage";
+import StudyPage from "./pages/StudyPage";
 
-import ChatPage from "./pages/ChatPage";
-import TestGeneratorPage from "./pages/TestGeneratorPage";
-import TestPage from "./pages/TestPage";
-import CodeSubmissionPage from "./pages/CodeSubmissionPage";
-import ResultPage from "./pages/ResultPage";
-import CodeJudge from "./pages/CodeJudge";
-
-function App() {
-  return (
-    <Router>
-
-      <Navbar />
-
-      <Routes>
-
-        <Route path="/" element={<ChatPage />} />
-
-        <Route path="/generate-test" element={<TestGeneratorPage />} />
-
-        <Route path="/test" element={<TestPage />} />
-
-        <Route path="/submit-code" element={<CodeSubmissionPage />} />
-
-        <Route path="/result" element={<ResultPage />} />
-        
-        <Route path="/code-judge" element={<CodeJudge />} />
-      </Routes>
-
-    </Router>
-  );
+function RequireAuth({ children }) {
+  const { profile } = useSelector((s) => s.student);
+  return profile ? children : <Navigate to="/" replace />;
 }
 
-export default App;
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/"          element={<LoginPage />} />
+        <Route path="/home"      element={<RequireAuth><HomePage /></RequireAuth>} />
+        <Route path="/chat"      element={<RequireAuth><ChatPage /></RequireAuth>} />
+        <Route path="/test"      element={<RequireAuth><TestPage /></RequireAuth>} />
+        <Route path="/code-judge" element={<RequireAuth><CodeJudge /></RequireAuth>} />
+        <Route path="/profile"   element={<RequireAuth><ProfilePage /></RequireAuth>} />
+        <Route path="*"          element={<Navigate to="/home" replace />} />
+        <Route path="/study" element={<RequireAuth><StudyPage /></RequireAuth>} />
+      </Routes>
+    </BrowserRouter>
+  );
+}

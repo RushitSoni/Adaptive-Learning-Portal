@@ -1,36 +1,30 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import { submitCode } from "../../services/api";
 
-export const submitCode = createAsyncThunk(
-  "codeJudge/submitCode",
-  async (payload) => {
-    const res = await fetch("http://127.0.0.1:8000/submit-code", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    return await res.json();
-  }
+export const runCode = createAsyncThunk(
+  "codeJudge/runCode",
+  async (payload) => submitCode(payload)
 );
 
 const codeJudgeSlice = createSlice({
   name: "codeJudge",
-  initialState: {
-    result: null,
-    loading: false
+  initialState: { result: null, loading: false, error: null },
+  reducers: {
+    clearResult(state) { state.result = null; state.error = null; },
   },
   extraReducers: (builder) => {
     builder
-      .addCase(submitCode.pending, (state) => {
-        state.loading = true;
-      })
-      .addCase(submitCode.fulfilled, (state, action) => {
+      .addCase(runCode.pending, (state) => { state.loading = true; state.error = null; })
+      .addCase(runCode.fulfilled, (state, action) => {
         state.loading = false;
         state.result = action.payload;
+      })
+      .addCase(runCode.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.error.message;
       });
-  }
+  },
 });
 
+export const { clearResult } = codeJudgeSlice.actions;
 export default codeJudgeSlice.reducer;
