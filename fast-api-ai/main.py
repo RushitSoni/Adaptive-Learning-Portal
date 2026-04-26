@@ -57,8 +57,6 @@ from rl_tracker import (
     get_session_summary
 )
 
-from pydantic import BaseModel
-from typing import List, Optional, Dict
 
 
 app = FastAPI(
@@ -82,6 +80,7 @@ class ChatRequest(BaseModel):
     question: str
     student_id: Optional[str] = None
     history: Optional[List[Dict]] = []
+    difficulty: Optional[str] = "medium"
 
 class ChatResponse(BaseModel):
     answer: str
@@ -261,7 +260,7 @@ def record_quiz(student_id: str, req: RecordQuizRequest): # RecordQuizRequest
  
     student = get_student(student_id)
     if not student:
-        raise Exception("404: Student not found")
+        raise HTTPException(status_code=404, detail="Student not found")
  
     # 1. Record in student_tracker (existing behaviour)
     record_quiz_result(student_id, req.topic, req.score, req.difficulty)
@@ -326,15 +325,56 @@ def health_check():
         return {"status": "error", "detail": str(e)}
 
 
+# @app.get("/syllabus")
+# def get_syllabus():
+#     result = []
+#     data_folder = "data"
+#     for filename in sorted(os.listdir(data_folder)):
+#         if not filename.endswith(".md"):
+#             continue
+#         topic = filename.replace(".md", "")
+#         filepath = os.path.join(data_folder, filename)
+#         try:
+#             with open(filepath, "r", encoding="utf-8") as f:
+#                 content = f.read()
+#             sections = re.findall(r'^## (.+)', content, re.MULTILINE)
+#             result.append({"topic": topic, "sections": sections})
+#         except Exception:
+#             result.append({"topic": topic, "sections": []})
+#     return {"topics": result}
+
+TOPIC_ORDER = [
+    "variables",
+    "strings",
+    "lists",
+    "dictionaries",
+    "functions",
+    "loops",
+    "exceptions",
+    "modules",
+    "oop",
+    "recursion",
+]
+
+
 @app.get("/syllabus")
 def get_syllabus():
     result = []
     data_folder = "data"
-    for filename in sorted(os.listdir(data_folder)):
-        if not filename.endswith(".md"):
-            continue
-        topic = filename.replace(".md", "")
-        filepath = os.path.join(data_folder, filename)
+ 
+    # Build a lookup of all available .md files first
+    available = {
+        f.replace(".md", ""): f
+        for f in os.listdir(data_folder)
+        if f.endswith(".md")
+    }
+ 
+    # Emit topics in the defined pedagogical order; skip any that aren't on disk
+    ordered = [t for t in TOPIC_ORDER if t in available]
+    # Append any extra topics not in TOPIC_ORDER at the end (future-proof)
+    extras = [t for t in sorted(available) if t not in TOPIC_ORDER]
+    for topic in ordered + extras:
+        filepath = os.path.join(data_folder, available[topic])
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -342,52 +382,81 @@ def get_syllabus():
             result.append({"topic": topic, "sections": sections})
         except Exception:
             result.append({"topic": topic, "sections": []})
+ 
     return {"topics": result}
 
 
+
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):   # ChatRequest — keeping signature identical
+@app.post("/chat", response_model=ChatResponse)
+def chat(req: ChatRequest):
     try:
         from validators import validate_question
         from security import detect_prompt_injection
         from topic_detector import detect_topic, is_on_syllabus, SYLLABUS_TOPICS
         from prompt_router import (
-            classify_query_type, classify_query_type_for_rl,
+            classify_query_type,
             build_prompt, build_prompt_with_strategy, determine_top_k
         )
+        from rl_policy import classify_query_type_for_rl
         from retriever import retrieve_chunks, calculate_confidence
         from reranker import rerank_chunks
         from rag_pipeline import generate_answer, check_faithfulness
         from query_rewriter import rewrite_query
         from student_tracker import update_chat_history, get_chat_history
- 
+
         question = validate_question(req.question)
         detect_prompt_injection(question)
- 
-        if not is_on_syllabus(question):
-            return {
-                "answer": f"This question doesn't appear to be about Python. "
-                          f"Covered topics: {', '.join(SYLLABUS_TOPICS)}.",
-                "topics_used": [], "confidence": 0.0,
-                "sources": [], "usage": {}, "rewritten_query": question,
-                "faithful": True, "strategy_used": None, "rl_metadata": None
-            }
- 
-        # Load chat history
+
+        # ── Step 1: Load history FIRST (needed for context-aware syllabus check) ──
         history = []
-        if req.student_id:
-            history = get_chat_history(req.student_id)
-        elif req.history:
+        if req.history:
             history = req.history
- 
-        rewritten         = rewrite_query(question)
-        topic             = detect_topic(question)
-        dynamic_top_k     = determine_top_k(question)
-        retrieved_chunks  = retrieve_chunks(query=rewritten, top_k=dynamic_top_k + 2, topic=topic)
- 
+        elif req.student_id:
+            history = get_chat_history(req.student_id)
+
+        # ── Step 2: Syllabus gate — context-aware ────────────────────────────────
+        # If question itself is off-syllabus (e.g. "give code for it"),
+        # check history before rejecting — it may have a valid topic context.
+        if not is_on_syllabus(question):
+            topic_from_history = None
+            if history:
+                for msg in reversed(history):
+                    past_topic = detect_topic(msg.get("content", ""))
+                    if past_topic:
+                        topic_from_history = past_topic
+                        break
+
+            # Truly off-topic — no context in history either → reject
+            if not topic_from_history:
+                return {
+                    "answer": f"This question doesn't appear to be about Python. "
+                              f"Covered topics: {', '.join(SYLLABUS_TOPICS)}.",
+                    "topics_used": [], "confidence": 0.0,
+                    "sources": [], "usage": {}, "rewritten_query": question,
+                    "faithful": True, "strategy_used": None, "rl_metadata": None
+                }
+            # else: topic found in history → fall through and answer normally
+
+        # ── Step 3: Query rewriting + topic detection ────────────────────────────
+        rewritten     = rewrite_query(question)
+        topic         = detect_topic(question)
+        dynamic_top_k = determine_top_k(question)
+
+        # If topic still missing (e.g. "give code for it"), inherit from history
+        if not topic and history:
+            for msg in reversed(history):
+                past_topic = detect_topic(msg.get("content", ""))
+                if past_topic:
+                    topic = past_topic
+                    break
+
+        # ── Step 4: Retrieve + rerank chunks ────────────────────────────────────
+        retrieved_chunks = retrieve_chunks(query=rewritten, top_k=dynamic_top_k + 2, topic=topic)
+
         if len(retrieved_chunks) > 2:
             retrieved_chunks = rerank_chunks(rewritten, retrieved_chunks, top_n=dynamic_top_k)
- 
+
         confidence = calculate_confidence(retrieved_chunks)
         if confidence < 0.4:
             return {
@@ -397,27 +466,22 @@ def chat(req: ChatRequest):   # ChatRequest — keeping signature identical
                 "sources": [], "usage": {}, "rewritten_query": rewritten,
                 "faithful": True, "strategy_used": None, "rl_metadata": None
             }
- 
+
         context_text = "\n\n".join(c["content"] for c in retrieved_chunks)
- 
-        # ── RL Strategy Selection (only when student_id present) ──────────
+
+        # ── Step 5: RL Strategy Selection (only when student_id present) ─────────
         strategy_used = None
         rl_metadata   = None
- 
+
         if req.student_id and topic:
             difficulty = req.difficulty if hasattr(req, 'difficulty') and req.difficulty else "medium"
- 
-            # Get BKT-derived performance band
-            bkt_state  = get_mastery(req.student_id, topic)
-            perf_band  = bkt_state["perf_band"]
- 
-            # Get last action for Level-2 state dimension
+
+            bkt_state   = get_mastery(req.student_id, topic)
+            perf_band   = bkt_state["perf_band"]
             last_action = get_last_action(req.student_id, topic)
- 
-            # Classify query type for RL (4-way)
+
             rl_query_type = classify_query_type_for_rl(question)
- 
-            # Build RL state
+
             state = build_state(
                 topic       = topic,
                 difficulty  = difficulty,
@@ -425,8 +489,7 @@ def chat(req: ChatRequest):   # ChatRequest — keeping signature identical
                 perf_band   = perf_band,
                 last_action = last_action
             )
- 
-            # Select action via RL policy
+
             rl_result     = select_action(
                 student_id  = req.student_id,
                 state       = state,
@@ -434,51 +497,50 @@ def chat(req: ChatRequest):   # ChatRequest — keeping signature identical
                 perf_band   = perf_band
             )
             strategy_used = rl_result["action"]
- 
-            # Build prompt using selected strategy
+
             final_prompt = build_prompt_with_strategy(question, context_text, strategy_used)
- 
+
             rl_metadata = {
-                "state":       state,
-                "strategy":    strategy_used,
-                "epsilon":     rl_result["epsilon"],
-                "explored":    rl_result["explored"],
-                "cold_start":  rl_result["cold_start"],
-                "perf_band":   perf_band,
-                "p_mastery":   bkt_state["p_mastery"],
+                "state":      state,
+                "strategy":   strategy_used,
+                "epsilon":    rl_result["epsilon"],
+                "explored":   rl_result["explored"],
+                "cold_start": rl_result["cold_start"],
+                "perf_band":  perf_band,
+                "p_mastery":  bkt_state["p_mastery"],
             }
- 
-            # Log doubt to RL tracker (for reward assignment when Quiz2 arrives)
+
             log_doubt(req.student_id, topic, state, strategy_used)
- 
+
         else:
             # Anonymous user — use legacy prompt routing
             query_type   = classify_query_type(question)
             final_prompt = build_prompt(query_type, question, context_text)
- 
+
+        # ── Step 6: Generate answer ──────────────────────────────────────────────
         answer, usage = generate_answer(final_prompt, history=history)
- 
+
         faithful = check_faithfulness(answer, context_text)
         if not faithful:
             answer = "I can only answer based on the syllabus material. Please rephrase."
- 
-        # Persist to MongoDB
+
+        # ── Step 7: Persist to MongoDB ───────────────────────────────────────────
         if req.student_id:
             update_chat_history(req.student_id, "user", question)
             update_chat_history(req.student_id, "assistant", answer)
- 
+
         return {
-            "answer":        answer,
-            "topics_used":   list({c["topic"] for c in retrieved_chunks}),
-            "confidence":    confidence,
-            "sources":       retrieved_chunks,
-            "usage":         usage,
+            "answer":          answer,
+            "topics_used":     list({c["topic"] for c in retrieved_chunks}),
+            "confidence":      confidence,
+            "sources":         retrieved_chunks,
+            "usage":           usage,
             "rewritten_query": rewritten,
-            "faithful":      faithful,
-            "strategy_used": strategy_used,
-            "rl_metadata":   rl_metadata,
+            "faithful":        faithful,
+            "strategy_used":   strategy_used,
+            "rl_metadata":     rl_metadata,
         }
- 
+
     except ValueError as e:
         raise Exception(f"400: {e}")
     except Exception as e:
@@ -647,7 +709,7 @@ def bkt_update(student_id: str, req: BKTUpdateRequest):
     from student_tracker import get_student
     student = get_student(student_id)
     if not student:
-        raise Exception("404: Student not found")
+        raise HTTPException(status_code=404, detail="Student not found")
  
     result = update_bkt(student_id, req.topic, req.is_correct)
     return {
@@ -669,7 +731,7 @@ def bkt_bulk_update(student_id: str, req: BulkBKTRequest):
     from student_tracker import get_student
     student = get_student(student_id)
     if not student:
-        raise Exception("404: Student not found")
+        raise HTTPException(status_code=404, detail="Student not found")
  
     result = bulk_update_bkt_from_quiz(
         student_id      = student_id,
@@ -691,7 +753,7 @@ def get_student_mastery(student_id: str):
     from student_tracker import get_student
     student = get_student(student_id)
     if not student:
-        raise Exception("404: Student not found")
+        raise HTTPException(status_code=404, detail="Student not found")
  
     mastery = get_all_mastery(student_id)
     return {
@@ -723,7 +785,7 @@ def start_rl_session(student_id: str, req: StartSessionRequest):
     from student_tracker import get_student
     student = get_student(student_id)
     if not student:
-        raise Exception("404: Student not found")
+        raise HTTPException(status_code=404, detail="Student not found")
  
     start_session(
         student_id  = student_id,

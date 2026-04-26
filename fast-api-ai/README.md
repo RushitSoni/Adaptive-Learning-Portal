@@ -37,3 +37,26 @@ extra api call, but better results
 
 query_rewriter.py
 
+bkt -> Track Srudent Mastery Lvl
+Bayesian Knowledge Tracing
+“Is this student actually learning this topic?”
+
+p_mastery → probability (0 to 1)
+perf_band → struggling / average / good / strong
+
+One row per (student, topic)
+
+DEFAULT_PARAMS = {
+    p_l0 = 0.20   # initial belief
+    p_t  = 0.15   # learning rate
+    p_g  = 0.20   # guessing
+    p_s  = 0.10   # slip
+}
+
+
+
+rl_policy  ->  “How should I teach this student right now?”
+rl_tracker  -> What happened between Quiz1 and Quiz2?
+
+
+

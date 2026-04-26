@@ -1,50 +1,61 @@
-# test_integration.py  — run against a live dev server
-import requests
+"""
+Test script for RL query type classifier
+Run: python test_query_classifier.py
+"""
 
-BASE = "http://localhost:8000"
+from rl_policy import classify_query_type_for_rl  # 👈 change this import
 
-# 1. Create student
-r = requests.post(f"{BASE}/student", json={"name": "Test Student"})
-sid = r.json()["student_id"]
+# ─── Test Dataset ───────────────────────────────────────────────
+TEST_CASES = [
+    # ── DEBUG ──
+    ("My code is not working, can you fix it?", "debug"),
+    ("I am getting error in recursion function", "debug"),
+    ("Why is this code throwing exception?", "debug"),
 
-# 2. Start session (Quiz1 score = 40)
-requests.post(f"{BASE}/student/{sid}/start-session",
-    json={"topic": "loops", "quiz1_score": 40.0, "difficulty": "easy"})
+    # ── COMPARE ──
+    ("What is difference between list and tuple?", "compare"),
+    ("Which is better, list or set?", "compare"),
+    ("Compare recursion vs iteration", "compare"),
 
-# 3. Ask a doubt — check strategy is returned
-r = requests.post(f"{BASE}/chat", json={
-    "question": "why is my for loop not working?",
-    "student_id": sid
-})
-body = r.json()
-assert "strategy_used" in body
-assert body["strategy_used"] is not None
-print(f"Strategy chosen: {body['strategy_used']}")      # first time = cold start
-print(f"RL metadata: {body['rl_metadata']}")
+    # ── APPLICATION ──
+    ("How to implement binary search in python?", "application"),
+    ("Write a program to reverse a string", "application"),
+    ("How do I build a REST API?", "application"),
 
-# 4. BKT update — student answered 3 MCQs (2 correct, 1 wrong)
-requests.post(f"{BASE}/student/{sid}/bkt-bulk-update", json={
-    "topic": "loops",
-    "mcq_results": [True, True, False],
-    "code_io_results": [True],
-    "coding_scores": [70.0]
-})
+    # ── CONCEPTUAL ──
+    ("What is recursion?", "conceptual"),
+    ("Explain OOP in python", "conceptual"),
+    ("What are decorators?", "conceptual"),
+]
 
-# 5. Check mastery
-r = requests.get(f"{BASE}/student/{sid}/mastery/loops")
-print(f"P(mastery): {r.json()['p_mastery']}")
 
-# 6. Record Quiz2 score — should trigger Q-table update
-r = requests.post(f"{BASE}/student/{sid}/record-quiz",
-    json={"topic": "loops", "score": 68.0, "difficulty": "easy"})
-print(f"RL session update: {r.json()['rl_session_update']}")
+# ─── Run Tests ──────────────────────────────────────────────────
+def run_tests():
+    correct = 0
+    total = len(TEST_CASES)
 
-# 7. Ask another doubt — now Q-table has data, no cold start
-r = requests.post(f"{BASE}/chat", json={
-    "question": "how does a while loop work?",
-    "student_id": sid
-})
-meta = r.json()["rl_metadata"]
-assert meta["cold_start"] == False     # Q-table learned something
-print(f"Second strategy: {r.json()['strategy_used']}")
-print("Integration tests passed ✅")
+    print("\n🔍 Running Query Classification Tests...\n")
+
+    for i, (question, expected) in enumerate(TEST_CASES, 1):
+        predicted = classify_query_type_for_rl(question)
+
+        status = "✅" if predicted == expected else "❌"
+
+        if predicted == expected:
+            correct += 1
+
+        print(f"{i}. {status}")
+        print(f"   Question  : {question}")
+        print(f"   Expected  : {expected}")
+        print(f"   Predicted : {predicted}\n")
+
+    accuracy = (correct / total) * 100
+
+    print("────────────────────────────────────────")
+    print(f"🎯 Accuracy: {accuracy:.2f}% ({correct}/{total})")
+    print("────────────────────────────────────────")
+
+
+# ─── Entry Point ────────────────────────────────────────────────
+if __name__ == "__main__":
+    run_tests()

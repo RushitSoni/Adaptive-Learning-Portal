@@ -1,118 +1,236 @@
 import re
+from sentence_transformers import SentenceTransformer, util
+ 
+# ── Load model once at import time ───────────────────────────────────────────
+# all-MiniLM-L6-v2: best balance of speed, size, and accuracy for this task.
+# Alternatives if you want even smaller:
+#   all-MiniLM-L3-v2  → 17MB, slightly less accurate
+#   paraphrase-MiniLM-L3-v2 → 17MB, good for paraphrase tasks
+_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+_model = SentenceTransformer(_MODEL_NAME)
 
-
-TOPIC_KEYWORDS = {
-    # Most specific topics first to avoid wrong matches
+# ── Similarity threshold ──────────────────────────────────────────────────────
+# If no topic scores above this, detect_topic returns None (off-syllabus).
+# Lower → more permissive (more matches, more false positives).
+# Higher → stricter (fewer matches, more false negatives).
+# 0.40 was calibrated empirically; adjust if you see consistent mis-drops.
+_THRESHOLD = 0.40
+ 
+ 
+# ── Topic Descriptions ────────────────────────────────────────────────────────
+# These replace your keyword lists.
+# Write them as natural language descriptions of what a student ACTUALLY SAYS
+# when they're asking about that topic — not abstract labels.
+#
+# Multiple descriptions per topic = better coverage of how the same concept
+# gets phrased differently. The topic embedding is their average.
+#
+# Tuning tip: if a topic is getting missed or mis-matched, ADD more description
+# variants covering the failing phrasing. No code changes needed elsewhere.
+ 
+TOPIC_DESCRIPTIONS = {
     "loops": [
-        "for loop", "while loop", "for in", "while true",
-        "iterate", "iteration", "iterating",
-        "break", "continue", "nested loop", "infinite loop",
-        "list iteration", "looping", "enumerate", "zip",
-        "range(", "loop variable", "repeat"
+        "how do I repeat something multiple times in Python",
+        "using a for loop or while loop to go through items",
+        "iterate over a list or range of numbers",
+        "my loop is running forever and won't stop",
+        "how do I use break or continue inside a loop",
+        "looping through a collection with enumerate or zip",
+        "nested loops and how to control them",
+        "how to write a loop that counts or repeats",
     ],
     "recursion": [
-        "recursion", "recursive", "base case", "call stack",
-        "factorial", "fibonacci", "recurse", "stack overflow",
-        "recursive function", "self call", "recursionerror",
-        "memoization", "lru_cache"
+        "what is recursion and how does it work",
+        "writing a recursive function in Python",
+        "what is a base case in recursion",
+        "my recursive function causes a stack overflow or RecursionError",
+        "how to solve factorial or fibonacci with recursion",
+        "how does the call stack work with recursive calls",
+        "memoization and caching recursive results with lru_cache",
     ],
     "exceptions": [
-        "exception", "try", "except", "finally", "raise",
-        "valueerror", "typeerror", "indexerror", "keyerror",
-        "attributeerror", "zerodivisionerror", "filenotfounderror",
-        "custom exception", "exception handling", "catch",
-        "runtime error", "traceback", "error handling"
+        "how do I handle errors in Python",
+        "using try and except blocks to catch exceptions",
+        "what does this error message or traceback mean",
+        "how do I raise my own custom exception",
+        "TypeError ValueError IndexError KeyError what do they mean",
+        "using finally to run cleanup code after an error",
+        "how to write safe code that doesn't crash on bad input",
     ],
     "functions": [
-        "function", "def", "return statement", "lambda",
-        "parameter", "argument", "default argument",
-        "keyword argument", "positional argument",
-        "args", "kwargs", "docstring", "higher order",
-        "closure", "anonymous function", "function call",
-        "local variable", "global variable", "scope",
-        "return value"
+        "how do I define and call a function in Python",
+        "what is the difference between parameters and arguments",
+        "using default arguments and keyword arguments in functions",
+        "what does the return statement do",
+        "using *args and **kwargs in a function definition",
+        "what is a lambda or anonymous function",
+        "understanding scope, local variables, and global variables",
+        "writing a docstring to document a function",
+        "higher order functions and closures",
     ],
     "oop": [
-        "class", "object", "inheritance", "polymorphism",
-        "oop", "oops", "encapsulation", "abstraction",
-        "__init__", "self parameter", "method", "instance",
-        "constructor", "super()", "subclass", "parent class",
-        "child class", "override", "overriding", "classmethod",
-        "staticmethod", "__str__", "__repr__", "dunder",
-        "magic method", "object oriented", "instantiate"
+        "how do I create a class and an object in Python",
+        "what is __init__ and what does self mean",
+        "how does inheritance work between a parent and child class",
+        "what is method overriding and polymorphism",
+        "using super() to call a parent class method",
+        "what are dunder or magic methods like __str__ and __repr__",
+        "difference between class methods, static methods, and instance methods",
+        "what is encapsulation and abstraction in object oriented programming",
     ],
     "variables": [
-        "variable", "data type", "integer", "float type",
-        "boolean", "type conversion", "casting", "int(",
-        "str(", "float(", "bool(", "none", "null",
-        "assignment", "dynamic typing", "type()", "isinstance",
-        "arithmetic", "operator", "modulus", "floor division"
+        "how do I store a value in a variable",
+        "what are the basic data types in Python like int float bool",
+        "how do I convert between data types like int to string",
+        "what does None mean in Python",
+        "how does Python handle dynamic typing",
+        "using arithmetic operators like modulus and floor division",
+        "how to check the type of a variable with type() or isinstance()",
     ],
     "lists": [
-        "list", "append", "extend", "insert", "remove",
-        "pop(", "slice", "slicing", "list comprehension",
-        "nested list", "2d list", "array", "index",
-        "sort(", "reverse(", "in operator", "unpack"
+        "how do I create and use a list in Python",
+        "adding or removing items from a list with append pop remove",
+        "how does list slicing work",
+        "writing a list comprehension",
+        "sorting or reversing a list",
+        "how to work with nested or 2D lists",
+        "checking if an item is in a list with the in operator",
+        "unpacking a list into variables",
     ],
     "dictionaries": [
-        "dictionary", "dict", "key value", "key-value",
-        "keys()", "values()", "items()", "get(",
-        "nested dict", "dict comprehension", "hashmap",
-        "setdefault", "update("
+        "how do I create and use a dictionary in Python",
+        "accessing values by key in a dictionary",
+        "how to loop through keys values and items of a dict",
+        "using get() to safely access a dictionary key",
+        "writing a dictionary comprehension",
+        "nested dictionaries and how to access them",
+        "adding or updating entries in a dictionary",
     ],
     "strings": [
-        "string", "substring", "concatenate", "split(",
-        "join(", "strip(", "replace(", "upper(", "lower(",
-        "f-string", "format(", "find(", "startswith",
-        "endswith", "string method", "immutable string",
-        "multiline string", "escape character", "raw string"
+        "how do I work with text and strings in Python",
+        "concatenating or joining strings together",
+        "splitting a string into parts or words",
+        "using f-strings or format() to insert values into text",
+        "string methods like strip replace upper lower find",
+        "checking if a string starts or ends with something",
+        "strings are immutable, what does that mean",
+        "multiline strings and escape characters",
     ],
     "modules": [
-        "import", "module", "package", "from import",
-        "os module", "sys module", "math module",
-        "random module", "datetime", "__name__", "__main__",
-        "pip", "standard library", "library"
+        "how do I import a module in Python",
+        "what is the difference between a module and a package",
+        "using the os sys math random or datetime module",
+        "what does if __name__ == '__main__' mean",
+        "how do I install a package with pip",
+        "using from module import to get specific functions",
+        "what is the Python standard library",
     ],
 }
 
-SYLLABUS_TOPICS = list(TOPIC_KEYWORDS.keys())
+
+SYLLABUS_TOPICS = list(TOPIC_DESCRIPTIONS.keys())
+
+# ── Pre-compute topic embeddings at import time ───────────────────────────────
+# Each topic → mean embedding of all its descriptions.
+# This is free to compute and only happens once.
+ 
+def _build_topic_embeddings() -> dict:
+    topic_embeddings = {}
+    for label, descriptions in TOPIC_DESCRIPTIONS.items():
+        embeddings = _model.encode(descriptions, convert_to_tensor=True)
+        # Average across all descriptions → single representative vector per topic
+        topic_embeddings[label] = embeddings.mean(dim=0)
+    return topic_embeddings
+ 
+_TOPIC_EMBEDDINGS = _build_topic_embeddings()
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+ 
+def _score_question(question: str) -> dict[str, float]:
+    """Return cosine similarity scores for every topic."""
+    q_embedding = _model.encode(question.strip(), convert_to_tensor=True)
+    return {
+        label: round(float(util.cos_sim(q_embedding, vec)), 4)
+        for label, vec in _TOPIC_EMBEDDINGS.items()
+    }
+
+
 
 
 def detect_topic(question: str) -> str | None:
     """
     Detect which syllabus topic a question belongs to.
-    Uses word-boundary regex matching to avoid false partial matches
-    e.g. "for" inside "information" or "performance".
-    Returns the topic name or None if not matched.
+    Uses semantic similarity — no keyword lists, no regex.
+ 
+    Args:
+        question: raw student question string
+ 
+    Returns:
+        One of the SYLLABUS_TOPICS strings, or None if the question
+        doesn't match any topic above _THRESHOLD.
+ 
+    Examples:
+        "how do I traverse a collection?"     → "loops"
+        "what does RecursionError mean?"      → "recursion"
+        "I want to store key-value pairs"     → "dictionaries"
+        "what is the weather today?"          → None
     """
-    question_lower = question.lower()
-
-    for topic, keywords in TOPIC_KEYWORDS.items():
-        for keyword in keywords:
-            # Word boundary match — prevents "for" matching "information"
-            pattern = r'\b' + re.escape(keyword.strip()) + r'\b'
-            if re.search(pattern, question_lower):
-                return topic
-
-    return None
-
-
+    if not question or not question.strip():
+        return None
+ 
+    scores = _score_question(question)
+    best_label = max(scores, key=scores.get)
+ 
+    return best_label if scores[best_label] >= _THRESHOLD else None
+ 
+ 
 def is_on_syllabus(question: str) -> bool:
     """
-    Broad check: is this question related to Python at all?
-    Used as a pre-filter before topic detection.
+    Broad check: is this question related to the Python syllabus at all?
+    Used as a pre-filter before more specific processing.
+ 
+    Returns True if any topic scores above _THRESHOLD.
+ 
+    Examples:
+        "how do I write a for loop?"   → True
+        "who won the cricket match?"   → False
     """
-    python_signals = [
-        "python", "code", "program", "syntax", "script",
-        "output", "print", "debug", "run", "error",
-        "write a", "how to", "what is", "explain", "example"
-    ]
-
-    question_lower = question.lower()
-
-    # If topic is detected, it's definitely on syllabus
-    if detect_topic(question) is not None:
-        return True
-
-    # Otherwise check for generic Python signals
-    return any(signal in question_lower for signal in python_signals)
+    if not question or not question.strip():
+        return False
+ 
+    scores = _score_question(question)
+    return max(scores.values()) >= _THRESHOLD
+ 
+ 
+def detect_topic_with_scores(question: str) -> dict:
+    """
+    Same as detect_topic but returns all scores.
+    Useful for debugging misclassifications or tuning _THRESHOLD.
+ 
+    Example output:
+    {
+        "predicted": "loops",
+        "scores": {
+            "loops": 0.7321,
+            "recursion": 0.3012,
+            "functions": 0.4890,
+            ...
+        },
+        "confidence": 0.7321,
+        "on_syllabus": True
+    }
+    """
+    if not question or not question.strip():
+        return {"predicted": None, "scores": {}, "confidence": 0.0, "on_syllabus": False}
+ 
+    scores = _score_question(question)
+    best_label = max(scores, key=scores.get)
+    confidence = scores[best_label]
+ 
+    return {
+        "predicted":   best_label if confidence >= _THRESHOLD else None,
+        "scores":      scores,
+        "confidence":  confidence,
+        "on_syllabus": confidence >= _THRESHOLD,
+    }
+ 

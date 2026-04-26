@@ -13,10 +13,20 @@ client = MongoClient(MONGO_URI)
 db = client["adaptive_learning"]
 students = db["students"]
 
+students.create_index("name", unique=True)
 
 # ── Create / Get ─────────────────────────────────────────────────────────────
 
+
 def create_student(name: str) -> dict:
+    # Check if student already exists
+    existing = students.find_one({"name": name})
+
+    if existing:
+        existing.pop("_id", None)
+        return existing
+
+    # Otherwise create new
     student = {
         "student_id": str(uuid.uuid4()),
         "name": name,
@@ -27,8 +37,9 @@ def create_student(name: str) -> dict:
         "quiz_history": [],       # full quiz records
         "topics_completed": [],   # topics attempted at least once
     }
+
     students.insert_one(student)
-    student.pop("_id")
+    student.pop("_id", None)
     return student
 
 

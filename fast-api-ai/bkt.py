@@ -4,19 +4,19 @@ Tracks P(mastery) per concept per student.
 Runs independently of RL — feeds a cleaner `perf_band` into RL state.
 
 BKT Parameters (per concept, can be tuned):
-  P(L0)    = prior probability student already knows concept
+  P(L0)    = prior probability student already knows concept BEFORE any question
   P(T)     = probability of learning from one exposure (transit)
   P(G)     = probability of correct answer despite NOT knowing (guess)
   P(S)     = probability of wrong answer despite knowing (slip)
 
 Update Rule (Bayes):
   After correct answer:
-    P(L|correct) = P(L)*( 1-P(S) ) / [ P(L)*(1-P(S)) + (1-P(L))*P(G) ]
+    P(L|correct) = P(L)*( 1-P(S) ) / [ P(L)*(1-P(S)) + (1-P(L))*P(G) ]   ----Denominator (total probability of correct answer)
   After wrong answer:
     P(L|wrong)   = P(L)*P(S)       / [ P(L)*P(S)     + (1-P(L))*(1-P(G)) ]
 
   Then apply learning (transit):
-    P(L_new) = P(L|obs) + (1 - P(L|obs)) * P(T)
+    P(L_new) = P(L|obs) + (1 - P(L|obs)) * P(T)       -----“Even if student didn’t know before,after this question → some learning happens”
 """
 
 from pymongo import MongoClient
