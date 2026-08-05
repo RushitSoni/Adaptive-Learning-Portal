@@ -1,25 +1,33 @@
-import os
-import hashlib
 import chromadb
-from dotenv import load_dotenv
 from embedding_client import get_embedding
 
-# Load variables from your .env file into os.environ
-load_dotenv()
+# Use PersistentClient (NEW way)
+chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
-CHROMA_API_KEY = os.environ["CHROMA_API_KEY"]
-CHROMA_TENANT = os.environ["CHROMA_TENANT"]
-CHROMA_DATABASE = os.environ["CHROMA_DATABASE"]
-
-# chroma_client = chromadb.PersistentClient(path="./chroma_db")  # old local version
-
-client = chromadb.CloudClient(
-    api_key=CHROMA_API_KEY,
-    tenant=CHROMA_TENANT,
-    database=CHROMA_DATABASE,
+collection = chroma_client.get_or_create_collection(
+    name="python_topics"
 )
 
-collection = client.get_or_create_collection(name="python_topics")
+def index_chunks(chunks):
+    for i, chunk in enumerate(chunks):
+        embedding = get_embedding(chunk["content"])
+
+        collection.add(
+            ids=[f"id_{i}"],
+            documents=[chunk["content"]],
+            metadatas=[{"topic": chunk["topic"]}],
+            embeddings=[embedding]
+        )
+
+import hashlib
+import chromadb
+from embedding_client import get_embedding
+
+chroma_client = chromadb.PersistentClient(path="./chroma_db")
+
+collection = chroma_client.get_or_create_collection(
+    name="python_topics"
+)
 
 BATCH_SIZE = 50
 
@@ -47,7 +55,7 @@ def index_chunks(chunks: list):
         metadatas.append({
             "topic": chunk["topic"],
             "section_title": chunk.get("section_title", chunk["topic"]),
-            "has_code": str(chunk.get("has_code", False)),
+            "has_code": str(chunk.get("has_code", False))
         })
         embeddings.append(embedding)
 
@@ -66,7 +74,7 @@ def _upsert_batch(ids, documents, metadatas, embeddings):
         ids=ids,
         documents=documents,
         metadatas=metadatas,
-        embeddings=embeddings,
+        embeddings=embeddings
     )
     print(f"  Upserted batch of {len(ids)} chunks.")
 
@@ -75,7 +83,7 @@ def get_all_chunks_for_topic(topic: str) -> list:
     """Fetch ALL chunks for a topic — used by quiz generator for full coverage."""
     results = collection.get(
         where={"topic": topic},
-        include=["documents", "metadatas"],
+        include=["documents", "metadatas"]
     )
     chunks = []
     for doc, meta in zip(results["documents"], results["metadatas"]):
@@ -83,6 +91,6 @@ def get_all_chunks_for_topic(topic: str) -> list:
             "content": doc,
             "topic": meta["topic"],
             "section_title": meta.get("section_title", topic),
-            "distance": 0.0,
+            "distance": 0.0
         })
     return chunks
