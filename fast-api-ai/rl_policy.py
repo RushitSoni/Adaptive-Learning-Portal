@@ -51,9 +51,8 @@ import logging
 import requests
 from pymongo import MongoClient
  
-from sentence_transformers import SentenceTransformer, util
-import torch
 from groq_client import call_groq
+from embedding_client import get_embedding, get_embeddings
 
 logger = logging.getLogger(__name__)
  
@@ -64,9 +63,25 @@ db = client["adaptive_learning"]
 global_q_col   = db["rl_global_q"]
 student_q_col  = db["rl_student_q"]
 cold_cache_col = db["rl_cold_cache"]   # NEW: LLM cold-start cache
- 
-_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-_model = SentenceTransformer(_MODEL_NAME)
+
+
+def _cosine_sim(a, b) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _mean_vector(vectors):
+    n = len(vectors)
+    dim = len(vectors[0])
+    out = [0.0] * dim
+    for vec in vectors:
+        for i in range(dim):
+            out[i] += vec[i]
+    return [v / n for v in out]
  
  
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -212,9 +227,9 @@ CLASS_DESCRIPTIONS = {
 def _build_class_embeddings() -> dict:
     class_embeddings = {}
     for label, descriptions in CLASS_DESCRIPTIONS.items():
-        embeddings = _model.encode(descriptions, convert_to_tensor=True)
+        embeddings = get_embeddings(descriptions)
         # Average across all descriptions → single representative vector per class
-        class_embeddings[label] = embeddings.mean(dim=0)
+        class_embeddings[label] = _mean_vector(embeddings)
     return class_embeddings
  
 _CLASS_EMBEDDINGS = _build_class_embeddings()
@@ -243,11 +258,11 @@ def classify_query_type_for_rl(question: str) -> str:
         return "conceptual"  # safe default
  
     # Embed the incoming question
-    q_embedding = _model.encode(question.strip(), convert_to_tensor=True)
+    q_embedding = get_embedding(question.strip())
  
     # Compute cosine similarity against each class centroid
     scores = {
-        label: float(util.cos_sim(q_embedding, class_vec))
+        label: _cosine_sim(q_embedding, class_vec)
         for label, class_vec in _CLASS_EMBEDDINGS.items()
     }
  
@@ -275,10 +290,10 @@ def classify_with_scores(question: str) -> dict:
     if not question or not question.strip():
         return {"predicted": "conceptual", "scores": {}, "confidence": 0.0}
  
-    q_embedding = _model.encode(question.strip(), convert_to_tensor=True)
+    q_embedding = get_embedding(question.strip())
  
     scores = {
-        label: round(float(util.cos_sim(q_embedding, class_vec)), 4)
+        label: round(_cosine_sim(q_embedding, class_vec), 4)
         for label, class_vec in _CLASS_EMBEDDINGS.items()
     }
  

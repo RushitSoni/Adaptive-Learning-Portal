@@ -27,3 +27,26 @@ def get_embedding(text):
         return data[0]
 
     return data
+
+
+def get_embeddings(texts):
+    """
+    Batch version of get_embedding — sends a list of strings in one HF API
+    call and returns a list of embedding vectors (same order as input).
+    Used by topic_detector to avoid one HTTP round-trip per description.
+    """
+    response = requests.post(
+        HF_URL,
+        headers=headers,
+        json={
+            "inputs": texts
+        }
+    )
+
+    if response.status_code != 200:
+        raise Exception(f"HuggingFace API Error: {response.text}")
+
+    data = response.json()
+
+    # HF returns a list of embeddings, one per input string
+    return data

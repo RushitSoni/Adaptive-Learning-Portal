@@ -1,13 +1,6 @@
 import re
-from sentence_transformers import SentenceTransformer, util
- 
-# ── Load model once at import time ───────────────────────────────────────────
-# all-MiniLM-L6-v2: best balance of speed, size, and accuracy for this task.
-# Alternatives if you want even smaller:
-#   all-MiniLM-L3-v2  → 17MB, slightly less accurate
-#   paraphrase-MiniLM-L3-v2 → 17MB, good for paraphrase tasks
-_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-_model = SentenceTransformer(_MODEL_NAME)
+import math
+from embedding_client import get_embedding, get_embeddings
 
 # ── Similarity threshold ──────────────────────────────────────────────────────
 # If no topic scores above this, detect_topic returns None (off-syllabus).
@@ -15,8 +8,8 @@ _model = SentenceTransformer(_MODEL_NAME)
 # Higher → stricter (fewer matches, more false negatives).
 # 0.40 was calibrated empirically; adjust if you see consistent mis-drops.
 _THRESHOLD = 0.40
- 
- 
+
+
 # ── Topic Descriptions ────────────────────────────────────────────────────────
 # These replace your keyword lists.
 # Write them as natural language descriptions of what a student ACTUALLY SAYS
@@ -27,7 +20,7 @@ _THRESHOLD = 0.40
 #
 # Tuning tip: if a topic is getting missed or mis-matched, ADD more description
 # variants covering the failing phrasing. No code changes needed elsewhere.
- 
+
 TOPIC_DESCRIPTIONS = {
     "loops": [
         "how do I repeat something multiple times in Python",
@@ -131,44 +124,62 @@ TOPIC_DESCRIPTIONS = {
 SYLLABUS_TOPICS = list(TOPIC_DESCRIPTIONS.keys())
 
 # ── Pre-compute topic embeddings at import time ───────────────────────────────
-# Each topic → mean embedding of all its descriptions.
-# This is free to compute and only happens once.
- 
+# Each topic → mean embedding of all its descriptions, fetched from the HF
+# hosted inference API (one batched call per topic) instead of a local
+# torch/sentence-transformers model. This keeps the process lightweight
+# enough to run on small hosting instances.
+
+def _mean_vector(vectors):
+    n = len(vectors)
+    dim = len(vectors[0])
+    out = [0.0] * dim
+    for vec in vectors:
+        for i in range(dim):
+            out[i] += vec[i]
+    return [v / n for v in out]
+
+
 def _build_topic_embeddings() -> dict:
     topic_embeddings = {}
     for label, descriptions in TOPIC_DESCRIPTIONS.items():
-        embeddings = _model.encode(descriptions, convert_to_tensor=True)
-        # Average across all descriptions → single representative vector per topic
-        topic_embeddings[label] = embeddings.mean(dim=0)
+        embeddings = get_embeddings(descriptions)
+        topic_embeddings[label] = _mean_vector(embeddings)
     return topic_embeddings
- 
+
 _TOPIC_EMBEDDINGS = _build_topic_embeddings()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
- 
-def _score_question(question: str) -> dict[str, float]:
+
+def _cosine_sim(a, b) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _score_question(question: str) -> dict:
     """Return cosine similarity scores for every topic."""
-    q_embedding = _model.encode(question.strip(), convert_to_tensor=True)
+    q_embedding = get_embedding(question.strip())
     return {
-        label: round(float(util.cos_sim(q_embedding, vec)), 4)
+        label: round(_cosine_sim(q_embedding, vec), 4)
         for label, vec in _TOPIC_EMBEDDINGS.items()
     }
 
 
-
-
-def detect_topic(question: str) -> str | None:
+def detect_topic(question: str):
     """
     Detect which syllabus topic a question belongs to.
-    Uses semantic similarity — no keyword lists, no regex.
- 
+    Uses semantic similarity (via hosted HF embeddings) — no keyword lists, no regex.
+
     Args:
         question: raw student question string
- 
+
     Returns:
         One of the SYLLABUS_TOPICS strings, or None if the question
         doesn't match any topic above _THRESHOLD.
- 
+
     Examples:
         "how do I traverse a collection?"     → "loops"
         "what does RecursionError mean?"      → "recursion"
@@ -177,36 +188,36 @@ def detect_topic(question: str) -> str | None:
     """
     if not question or not question.strip():
         return None
- 
+
     scores = _score_question(question)
     best_label = max(scores, key=scores.get)
- 
+
     return best_label if scores[best_label] >= _THRESHOLD else None
- 
- 
+
+
 def is_on_syllabus(question: str) -> bool:
     """
     Broad check: is this question related to the Python syllabus at all?
     Used as a pre-filter before more specific processing.
- 
+
     Returns True if any topic scores above _THRESHOLD.
- 
+
     Examples:
         "how do I write a for loop?"   → True
         "who won the cricket match?"   → False
     """
     if not question or not question.strip():
         return False
- 
+
     scores = _score_question(question)
     return max(scores.values()) >= _THRESHOLD
- 
- 
+
+
 def detect_topic_with_scores(question: str) -> dict:
     """
     Same as detect_topic but returns all scores.
     Useful for debugging misclassifications or tuning _THRESHOLD.
- 
+
     Example output:
     {
         "predicted": "loops",
@@ -222,15 +233,14 @@ def detect_topic_with_scores(question: str) -> dict:
     """
     if not question or not question.strip():
         return {"predicted": None, "scores": {}, "confidence": 0.0, "on_syllabus": False}
- 
+
     scores = _score_question(question)
     best_label = max(scores, key=scores.get)
     confidence = scores[best_label]
- 
+
     return {
         "predicted":   best_label if confidence >= _THRESHOLD else None,
         "scores":      scores,
         "confidence":  confidence,
         "on_syllabus": confidence >= _THRESHOLD,
     }
- 

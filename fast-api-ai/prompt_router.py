@@ -17,13 +17,6 @@ Teaching strategies (actions) injected by RL policy:
   socratic         guiding questions instead of direct answer
   compare_contrast two approaches side by side
 """
-from sentence_transformers import SentenceTransformer, util
-import torch
-
-_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-_model = SentenceTransformer(_MODEL_NAME)
-
-
 SYLLABUS_RULE = """
 STRICT RULE: Answer ONLY using information from the Context provided above.
 If the answer is not present in the context, respond with exactly:
