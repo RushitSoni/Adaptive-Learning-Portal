@@ -1,7 +1,7 @@
 from vector_store import collection
 from embedding_client import get_embedding
 
-DISTANCE_THRESHOLD = 0.7
+DISTANCE_THRESHOLD = 0.5
 
 
 def retrieve_chunks(query: str, top_k: int = 5, topic: str = None) -> list:
