@@ -48,8 +48,8 @@ def check_faithfulness(answer: str, context: str) -> bool:
             "content": (
                 f"Context:\n{context}\n\n"
                 f"Answer:\n{answer}\n\n"
-                "Does the Answer contain ONLY information that is present in the Context above? "
-                "Reply YES if it is fully grounded. Reply NO if it uses outside knowledge."
+                "Does the Answer contain ONLY information that is present in the Context above or related to programming language Python? "
+                "Reply YES if it is fully grounded or based on Python. Reply NO if it uses outside knowledge."
             )
         }
     ]
