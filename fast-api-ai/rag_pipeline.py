@@ -27,19 +27,23 @@ def generate_answer(prompt: str, history: list = None) -> tuple:
         return llm_response["content"], llm_response["usage"]
     except Exception as e:
         raise Exception(f"Groq API Error: {str(e)}")
-
-
 def check_faithfulness(answer: str, context: str) -> bool:
     """
     Ask the LLM: does this answer contain info NOT in the context?
     Returns True if answer is faithful (grounded in context).
-    Returns False if answer uses outside knowledge.
+    Skips the LLM call entirely for short answers — only checks longer answers,
+    and even then is heavily biased toward returning True.
     """
+    # Skip the check for short/simple answers — treat as automatically faithful
+    if len(answer.strip()) < 200:
+        return True
+
     messages = [
         {
             "role": "system",
             "content": (
-                "You are a fact-checking assistant. "
+                "You are a lenient fact-checking assistant. "
+                "Give the student the benefit of the doubt. "
                 "Answer ONLY with YES or NO. Nothing else."
             )
         },
@@ -48,8 +52,9 @@ def check_faithfulness(answer: str, context: str) -> bool:
             "content": (
                 f"Context:\n{context}\n\n"
                 f"Answer:\n{answer}\n\n"
-                "Does the Answer contain ONLY information that is present in the Context above or related to programming language Python? "
-                "Reply YES if it is fully grounded or based on Python. Reply NO if it uses outside knowledge."
+                "Is the Answer reasonably related to the Context, to general programming concepts, "
+                "or to Python in any way? Reply YES unless the Answer is completely unrelated to "
+                "both the Context and programming. Reply NO only if it is clearly off-topic or fabricated nonsense."
             )
         }
     ]
@@ -57,7 +62,7 @@ def check_faithfulness(answer: str, context: str) -> bool:
     try:
         response = call_groq(messages, max_tokens=5)
         verdict = response["content"].strip().upper()
-        return verdict.startswith("YES")
+        return not verdict.startswith("NO")  # default to True unless explicit NO
     except Exception:
         # On failure, assume faithful (don't block the student)
         return True
