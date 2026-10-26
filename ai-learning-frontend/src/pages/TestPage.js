@@ -18,7 +18,7 @@ function clearAllCodeJudgeStorage() {
   The difficulty is auto-fetched from the suggestedDifficulty endpoint.
   num_questions defaults to 6 but can be tweaked via the constant below.
 */
-const DEFAULT_NUM_QUESTIONS = 6;
+const DEFAULT_NUM_QUESTIONS = 3;
 
 export default function TestPage() {
   const dispatch   = useDispatch();
