@@ -592,6 +592,58 @@ def summarise_topic(req: SummaryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# @app.post("/generate-test", response_model=TestResponse)
+# def generate_test(req: TestRequest):
+#     try:
+#         if req.difficulty not in ["easy", "medium", "hard"]:
+#             raise HTTPException(status_code=400, detail="difficulty must be easy, medium, or hard")
+#         if req.num_questions < 3:
+#             raise HTTPException(status_code=400, detail="Minimum 3 questions required")
+
+#         topic = resolve_topic(req.topic)
+#         if not topic:
+#             raise HTTPException(status_code=400,
+#                 detail=f"Topic not recognised. Available: {', '.join(SYLLABUS_TOPICS)}")
+
+#         all_chunks = get_all_chunks_for_topic(topic)
+#         if not all_chunks:
+#             raise HTTPException(status_code=400, detail="No content indexed for this topic.")
+
+#         context_text = "\n\n".join(c["content"] for c in all_chunks)
+#         confidence = calculate_confidence(
+#             retrieve_chunks(query=req.topic, top_k=3, topic=topic)
+#         )
+
+#         mcq_count, code_io_count, coding_count = split_question_types(req.num_questions)
+#         final_prompt = build_test_prompt(
+#             topic=topic, difficulty=req.difficulty, context=context_text,
+#             mcq_count=mcq_count, code_io_count=code_io_count, coding_count=coding_count
+#         )
+
+#         answer, usage = generate_answer(final_prompt)
+
+#         clean = answer.strip()
+#         if clean.startswith("```"):
+#             clean = clean.split("```")[1]
+#             if clean.startswith("json"):
+#                 clean = clean[4:]
+#         clean = clean.strip()
+
+#         try:
+#             parsed_test = json.loads(clean)
+#         except json.JSONDecodeError:
+#             raise HTTPException(status_code=500, detail="LLM returned invalid JSON for test.")
+
+#         return {"test": parsed_test, "topics_used": [topic], "confidence": confidence, "usage": usage}
+
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+import json, re, traceback
+
+
 @app.post("/generate-test", response_model=TestResponse)
 def generate_test(req: TestRequest):
     try:
@@ -609,7 +661,8 @@ def generate_test(req: TestRequest):
         if not all_chunks:
             raise HTTPException(status_code=400, detail="No content indexed for this topic.")
 
-        context_text = "\n\n".join(c["content"] for c in all_chunks)
+        # Limit context size to reduce token-limit problems
+        context_text = "\n\n".join(c["content"] for c in all_chunks[:10])
         confidence = calculate_confidence(
             retrieve_chunks(query=req.topic, top_k=3, topic=topic)
         )
@@ -620,26 +673,59 @@ def generate_test(req: TestRequest):
             mcq_count=mcq_count, code_io_count=code_io_count, coding_count=coding_count
         )
 
-        answer, usage = generate_answer(final_prompt)
+        parsed_test, usage, last_error = None, None, None
 
-        clean = answer.strip()
-        if clean.startswith("```"):
-            clean = clean.split("```")[1]
-            if clean.startswith("json"):
-                clean = clean[4:]
-        clean = clean.strip()
+        for attempt in (1, 2):  # one retry if the LLM returns bad JSON
+            answer, usage = generate_answer(final_prompt)
+            text = (answer or "").strip()
 
-        try:
-            parsed_test = json.loads(clean)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=500, detail="LLM returned invalid JSON for test.")
+            print(f"[generate-test] attempt {attempt} usage: {usage}")
+            print(f"[generate-test] attempt {attempt} length: {len(text)}")
+
+            # 1) Try the raw output first (the normal case)
+            try:
+                parsed_test = json.loads(text)
+                break
+            except json.JSONDecodeError:
+                pass
+
+            # 2) Only strip a code fence if the output STARTS with one
+            candidate = text
+            if candidate.startswith("```"):
+                candidate = re.sub(r"^```[a-zA-Z]*\s*", "", candidate)
+                candidate = re.sub(r"\s*```\s*$", "", candidate)
+                try:
+                    parsed_test = json.loads(candidate)
+                    break
+                except json.JSONDecodeError:
+                    pass
+
+            # 3) Fall back to the span from the first { to the last }
+            start, end = candidate.find("{"), candidate.rfind("}")
+            try:
+                if start == -1 or end <= start:
+                    raise json.JSONDecodeError("No JSON object found in LLM output", candidate, 0)
+                parsed_test = json.loads(candidate[start:end + 1])
+                break
+            except json.JSONDecodeError as e:
+                last_error = e
+                print(f"[generate-test] attempt {attempt} JSON ERROR: {e}")
+                print(f"[generate-test] attempt {attempt} START: {text[:300]!r}")
+                print(f"[generate-test] attempt {attempt} END:   {text[-300:]!r}")
+
+        if parsed_test is None:
+            raise HTTPException(
+                status_code=500,
+                detail=f"LLM returned invalid JSON for test: {last_error}"
+            )
 
         return {"test": parsed_test, "topics_used": [topic], "confidence": confidence, "usage": usage}
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
 
 @app.post("/evaluate-objective")

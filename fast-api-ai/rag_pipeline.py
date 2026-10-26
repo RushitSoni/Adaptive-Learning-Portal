@@ -23,7 +23,7 @@ def generate_answer(prompt: str, history: list = None) -> tuple:
     messages.append({"role": "user", "content": prompt})
 
     try:
-        llm_response = call_groq(messages, max_tokens=1024)
+        llm_response = call_groq(messages, max_tokens=8192)
         return llm_response["content"], llm_response["usage"]
     except Exception as e:
         raise Exception(f"Groq API Error: {str(e)}")
